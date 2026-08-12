@@ -54,6 +54,8 @@ export default function Home() {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState("");
   const [expanded, setExpanded] = useState({});
+  const [done, setDone] = useState({});
+  const [redoing, setRedoing] = useState({});
 
   async function generate() {
     if (!feature.trim()) return;
@@ -61,7 +63,7 @@ export default function Home() {
     setError("");
     setResult(null);
     setExpanded({});
-
+    setDone({});
     try {
       const resp = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -75,16 +77,12 @@ export default function Home() {
           model: "claude-sonnet-4-6",
           max_tokens: 2048,
           system: systemPrompt,
-          messages: [{
-            role: "user",
-            content: `Feature Description: ${feature}\nPrimary Persona: ${persona}\nProduct Area: ${area}\n\nGenerate the epic and user stories for this feature.`
-          }]
+          messages: [{ role: "user", content: `Feature Description: ${feature}\nPrimary Persona: ${persona}\nProduct Area: ${area}\n\nGenerate the epic and user stories for this feature.` }]
         })
       });
       const data = await resp.json();
       const raw = data.content?.find(b => b.type === "text")?.text || "";
-      const clean = raw.replace(/```json|```/g, "").trim();
-      const parsed = JSON.parse(clean);
+      const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
       setResult(parsed);
       setExpanded(Object.fromEntries(parsed.stories.map(s => [s.id, true])));
     } catch (e) {
@@ -94,14 +92,44 @@ export default function Home() {
     }
   }
 
+  async function redoStory(storyId) {
+    setRedoing(r => ({ ...r, [storyId]: true }));
+    try {
+      const resp = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true"
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 800,
+          system: systemPrompt,
+          messages: [{ role: "user", content: `Feature Description: ${feature}\nPrimary Persona: ${persona}\nProduct Area: ${area}\n\nRegenerate ONLY story "${storyId}" as a fresh alternative. Return JSON with a single "story" key containing just that story object.` }]
+        })
+      });
+      const data = await resp.json();
+      const raw = data.content?.find(b => b.type === "text")?.text || "";
+      const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
+      const newStory = parsed.story || parsed;
+      newStory.id = storyId;
+      setResult(prev => ({ ...prev, stories: prev.stories.map(s => s.id === storyId ? newStory : s) }));
+      setDone(d => ({ ...d, [storyId]: false }));
+    } catch (e) { /* fail silently */ } finally {
+      setRedoing(r => ({ ...r, [storyId]: false }));
+    }
+  }
+
+  function reset() {
+    setResult(null); setFeature(""); setExpanded({}); setDone({}); setError(""); setCopied("");
+  }
+
   function copyStory(story) {
-    const text = [
-      `${story.id}: ${story.title}`, ``,
-      story.story, ``,
-      `Acceptance Criteria:`,
-      ...story.acceptanceCriteria.map((c, i) => `${i + 1}. ${c}`),
-      ``, `Story Points: ${story.storyPoints} | Priority: ${story.priority}`
-    ].join("\n");
+    const text = [`${story.id}: ${story.title}`, ``, story.story, ``, `Acceptance Criteria:`,
+    ...story.acceptanceCriteria.map((c, i) => `${i + 1}. ${c}`), ``,
+    `Story Points: ${story.storyPoints} | Priority: ${story.priority}`].join("\n");
     navigator.clipboard.writeText(text);
     setCopied(story.id);
     setTimeout(() => setCopied(""), 2000);
@@ -109,29 +137,18 @@ export default function Home() {
 
   function copyAll() {
     if (!result) return;
-    const text = [
-      `EPIC: ${result.epic.title}`, result.epic.description, ``,
-      ...result.stories.flatMap(s => [
-        `---`, `${s.id}: ${s.title}`, s.story, ``,
-        `Acceptance Criteria:`,
-        ...s.acceptanceCriteria.map((c, i) => `${i + 1}. ${c}`),
-        `Story Points: ${s.storyPoints} | Priority: ${s.priority}`, ``
-      ])
+    const text = [`EPIC: ${result.epic.title}`, result.epic.description, ``,
+    ...result.stories.flatMap(s => [`---`, `${s.id}: ${s.title}`, s.story, ``, `Acceptance Criteria:`,
+      ...s.acceptanceCriteria.map((c, i) => `${i + 1}. ${c}`), `Story Points: ${s.storyPoints} | Priority: ${s.priority}`, ``])
     ].join("\n");
     navigator.clipboard.writeText(text);
     setCopied("all");
     setTimeout(() => setCopied(""), 2000);
   }
 
-  function investScore(invest) {
-    return Object.values(invest).filter(Boolean).length;
-  }
-
-  const priorityColor = (p) => ({
-    High: { bg: "#FEE2E2", text: "#B91C1C" },
-    Medium: { bg: "#FEF3C7", text: "#92400E" },
-    Low: { bg: "#DCFCE7", text: "#166534" }
-  }[p] || { bg: "#F3F4F6", text: "#374151" });
+  const priorityColor = (p) => ({ High: { bg: "#FEE2E2", text: "#B91C1C" }, Medium: { bg: "#FEF3C7", text: "#92400E" }, Low: { bg: "#DCFCE7", text: "#166534" } }[p] || { bg: "#F3F4F6", text: "#374151" });
+  const doneCount = result ? result.stories.filter(s => done[s.id]).length : 0;
+  const totalCount = result ? result.stories.length : 0;
 
   return (
     <>
@@ -140,7 +157,6 @@ export default function Home() {
         <meta name="description" content="AI-powered user story generator for branch banking product teams" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </Head>
-
       <div style={{ fontFamily: "'Inter', system-ui, sans-serif", minHeight: "100vh", background: "#F0F4F8", color: "#1E293B" }}>
 
         <div style={{ background: "#0F2847", padding: "18px 32px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -153,7 +169,14 @@ export default function Home() {
               <div style={{ color: "#94A3B8", fontSize: 11 }}>AI-Powered User Story Generator · Branch Operations</div>
             </div>
           </div>
-          <div style={{ color: "#64748B", fontSize: 12 }}>Built for Product Associates</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            {result && (
+              <button onClick={reset} style={{ padding: "6px 14px", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 6, color: "white", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                ↺ Reset
+              </button>
+            )}
+            <div style={{ color: "#64748B", fontSize: 12 }}>Built for Product Associates</div>
+          </div>
         </div>
 
         <div style={{ maxWidth: 1100, margin: "0 auto", padding: "28px 24px", display: "grid", gridTemplateColumns: "380px 1fr", gap: 24, alignItems: "start" }}>
@@ -161,37 +184,42 @@ export default function Home() {
           <div style={{ background: "white", borderRadius: 12, padding: 24, boxShadow: "0 1px 4px rgba(0,0,0,0.08)", position: "sticky", top: 24 }}>
             <div style={{ fontSize: 14, fontWeight: 600, color: "#0F2847", marginBottom: 4 }}>Feature Description</div>
             <div style={{ fontSize: 12, color: "#64748B", marginBottom: 12 }}>Describe the feature or capability you want to build.</div>
-
-            <textarea
-              value={feature}
-              onChange={e => setFeature(e.target.value)}
+            <textarea value={feature} onChange={e => setFeature(e.target.value)}
               placeholder="e.g. Allow branch employees to flag a customer account for relationship manager follow-up directly from the teller screen, with a reason code and priority level."
               style={{ width: "100%", minHeight: 130, border: "1.5px solid #E2E8F0", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "#1E293B", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5, boxSizing: "border-box", outline: "none" }}
-              onFocus={e => e.target.style.borderColor = "#2563EB"}
-              onBlur={e => e.target.style.borderColor = "#E2E8F0"}
-            />
-
+              onFocus={e => e.target.style.borderColor = "#2563EB"} onBlur={e => e.target.style.borderColor = "#E2E8F0"} />
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 14 }}>
               <div>
                 <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>Primary Persona</label>
-                <select value={persona} onChange={e => setPersona(e.target.value)}
-                  style={{ width: "100%", border: "1.5px solid #E2E8F0", borderRadius: 8, padding: "8px 10px", fontSize: 13, color: "#1E293B", fontFamily: "inherit", background: "white" }}>
+                <select value={persona} onChange={e => setPersona(e.target.value)} style={{ width: "100%", border: "1.5px solid #E2E8F0", borderRadius: 8, padding: "8px 10px", fontSize: 13, color: "#1E293B", fontFamily: "inherit", background: "white" }}>
                   {PERSONAS.map(p => <option key={p}>{p}</option>)}
                 </select>
               </div>
               <div>
                 <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>Product Area</label>
-                <select value={area} onChange={e => setArea(e.target.value)}
-                  style={{ width: "100%", border: "1.5px solid #E2E8F0", borderRadius: 8, padding: "8px 10px", fontSize: 13, color: "#1E293B", fontFamily: "inherit", background: "white" }}>
+                <select value={area} onChange={e => setArea(e.target.value)} style={{ width: "100%", border: "1.5px solid #E2E8F0", borderRadius: 8, padding: "8px 10px", fontSize: 13, color: "#1E293B", fontFamily: "inherit", background: "white" }}>
                   {AREAS.map(a => <option key={a}>{a}</option>)}
                 </select>
               </div>
             </div>
-
             <button onClick={generate} disabled={loading || !feature.trim()}
               style={{ width: "100%", marginTop: 16, padding: "11px 0", background: feature.trim() && !loading ? "#2563EB" : "#94A3B8", color: "white", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: feature.trim() && !loading ? "pointer" : "not-allowed" }}>
               {loading ? "Generating..." : "Generate User Stories"}
             </button>
+
+            {result && (
+              <div style={{ marginTop: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>Progress</span>
+                  <span style={{ fontSize: 12, color: doneCount === totalCount ? "#16A34A" : "#64748B", fontWeight: 600 }}>
+                    {doneCount}/{totalCount} complete {doneCount === totalCount && totalCount > 0 ? "✓" : ""}
+                  </span>
+                </div>
+                <div style={{ background: "#E2E8F0", borderRadius: 99, height: 8, overflow: "hidden" }}>
+                  <div style={{ background: doneCount === totalCount ? "#16A34A" : "#2563EB", height: "100%", borderRadius: 99, width: `${totalCount > 0 ? (doneCount / totalCount) * 100 : 0}%`, transition: "width 0.3s ease" }} />
+                </div>
+              </div>
+            )}
 
             <div style={{ marginTop: 20, padding: 14, background: "#F8FAFC", borderRadius: 8, border: "1px solid #E2E8F0" }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", letterSpacing: "0.05em", marginBottom: 8 }}>INVEST CRITERIA</div>
@@ -209,12 +237,9 @@ export default function Home() {
               <div style={{ background: "white", borderRadius: 12, padding: 48, textAlign: "center", boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
                 <div style={{ fontSize: 40, marginBottom: 12 }}>📋</div>
                 <div style={{ fontSize: 16, fontWeight: 600, color: "#0F2847", marginBottom: 6 }}>Ready to generate</div>
-                <div style={{ fontSize: 13, color: "#64748B", maxWidth: 320, margin: "0 auto" }}>
-                  Describe a feature, choose your persona and product area, then generate dev-ready user stories with acceptance criteria.
-                </div>
+                <div style={{ fontSize: 13, color: "#64748B", maxWidth: 320, margin: "0 auto" }}>Describe a feature, choose your persona and product area, then generate dev-ready user stories with acceptance criteria.</div>
               </div>
             )}
-
             {loading && (
               <div style={{ background: "white", borderRadius: 12, padding: 48, textAlign: "center", boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
                 <div style={{ width: 40, height: 40, border: "3px solid #E2E8F0", borderTop: "3px solid #2563EB", borderRadius: "50%", margin: "0 auto 16px", animation: "spin 0.8s linear infinite" }} />
@@ -222,12 +247,7 @@ export default function Home() {
                 <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
               </div>
             )}
-
-            {error && (
-              <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 12, padding: 20, color: "#B91C1C", fontSize: 14 }}>
-                {error}
-              </div>
-            )}
+            {error && <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 12, padding: 20, color: "#B91C1C", fontSize: 14 }}>{error}</div>}
 
             {result && (
               <div>
@@ -237,43 +257,53 @@ export default function Home() {
                     <div style={{ fontSize: 18, fontWeight: 700, color: "white", marginBottom: 6 }}>{result.epic.title}</div>
                     <div style={{ fontSize: 13, color: "#94A3B8", lineHeight: 1.5 }}>{result.epic.description}</div>
                   </div>
-                  <button onClick={copyAll}
-                    style={{ padding: "6px 14px", background: copied === "all" ? "#16A34A" : "#2563EB", color: "white", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", marginLeft: 16, flexShrink: 0 }}>
+                  <button onClick={copyAll} style={{ padding: "6px 14px", background: copied === "all" ? "#16A34A" : "#2563EB", color: "white", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", marginLeft: 16, flexShrink: 0 }}>
                     {copied === "all" ? "✓ Copied!" : "Copy All"}
                   </button>
                 </div>
 
                 {result.stories.map((story) => {
                   const isOpen = expanded[story.id];
+                  const isDone = done[story.id];
+                  const isRedoing = redoing[story.id];
                   const pc = priorityColor(story.priority);
-                  const score = investScore(story.invest);
+                  const score = Object.values(story.invest).filter(Boolean).length;
                   return (
-                    <div key={story.id} style={{ background: "white", borderRadius: 12, marginBottom: 12, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", overflow: "hidden", border: "1.5px solid #E2E8F0" }}>
-                      <div onClick={() => setExpanded(e => ({ ...e, [story.id]: !e[story.id] }))}
-                        style={{ padding: "14px 18px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", userSelect: "none" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
-                          <span style={{ fontSize: 11, fontWeight: 700, color: "#64748B", background: "#F1F5F9", padding: "2px 8px", borderRadius: 4, fontFamily: "monospace" }}>{story.id}</span>
-                          <span style={{ fontSize: 14, fontWeight: 600, color: "#0F2847" }}>{story.title}</span>
+                    <div key={story.id} style={{ background: isDone ? "#F0FDF4" : "white", borderRadius: 12, marginBottom: 12, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", overflow: "hidden", border: `1.5px solid ${isDone ? "#86EFAC" : "#E2E8F0"}`, opacity: isDone ? 0.75 : 1, transition: "all 0.2s" }}>
+                      <div style={{ padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <div onClick={() => !isDone && setExpanded(e => ({ ...e, [story.id]: !e[story.id] }))}
+                          style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, cursor: isDone ? "default" : "pointer", userSelect: "none" }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: isDone ? "#16A34A" : "#64748B", background: isDone ? "#DCFCE7" : "#F1F5F9", padding: "2px 8px", borderRadius: 4, fontFamily: "monospace" }}>
+                            {isDone ? "✓" : story.id}
+                          </span>
+                          <span style={{ fontSize: 14, fontWeight: 600, color: isDone ? "#15803D" : "#0F2847", textDecoration: isDone ? "line-through" : "none" }}>{story.title}</span>
                         </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                          <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: pc.bg, color: pc.text }}>{story.priority}</span>
-                          <span style={{ fontSize: 11, color: "#64748B", background: "#F1F5F9", padding: "2px 8px", borderRadius: 4 }}>{story.storyPoints} pts</span>
-                          <div style={{ display: "flex", gap: 2 }}>
-                            {INVEST.map(c => (
-                              <div key={c} title={c} style={{ width: 8, height: 8, borderRadius: "50%", background: story.invest[c.toLowerCase()] ? "#2563EB" : "#E2E8F0" }} />
-                            ))}
-                          </div>
-                          <span style={{ color: "#94A3B8", fontSize: 16, marginLeft: 4 }}>{isOpen ? "▲" : "▼"}</span>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                          {!isDone && <>
+                            <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: pc.bg, color: pc.text }}>{story.priority}</span>
+                            <span style={{ fontSize: 11, color: "#64748B", background: "#F1F5F9", padding: "2px 8px", borderRadius: 4 }}>{story.storyPoints} pts</span>
+                            <div style={{ display: "flex", gap: 2 }}>
+                              {INVEST.map(c => <div key={c} title={c} style={{ width: 8, height: 8, borderRadius: "50%", background: story.invest[c.toLowerCase()] ? "#2563EB" : "#E2E8F0" }} />)}
+                            </div>
+                            <button onClick={() => redoStory(story.id)} disabled={isRedoing} title="Regenerate this story"
+                              style={{ padding: "4px 8px", background: "none", border: "1px solid #E2E8F0", borderRadius: 6, color: "#64748B", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
+                              {isRedoing ? "↻…" : "↻"}
+                            </button>
+                          </>}
+                          <button onClick={() => setDone(d => ({ ...d, [story.id]: !d[story.id] }))}
+                            style={{ padding: "4px 10px", background: isDone ? "#16A34A" : "none", border: `1px solid ${isDone ? "#16A34A" : "#E2E8F0"}`, borderRadius: 6, color: isDone ? "white" : "#64748B", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>
+                            {isDone ? "✓ Done" : "Done"}
+                          </button>
+                          {!isDone && <span onClick={() => setExpanded(e => ({ ...e, [story.id]: !e[story.id] }))} style={{ color: "#94A3B8", fontSize: 16, marginLeft: 2, cursor: "pointer" }}>{isOpen ? "▲" : "▼"}</span>}
                         </div>
                       </div>
 
-                      {isOpen && (
+                      {isOpen && !isDone && (
                         <div style={{ padding: "0 18px 18px" }}>
                           <div style={{ background: "#F8FAFC", borderRadius: 8, padding: "12px 14px", marginBottom: 14, borderLeft: "3px solid #2563EB" }}>
                             <div style={{ fontSize: 11, fontWeight: 700, color: "#2563EB", marginBottom: 4 }}>USER STORY</div>
                             <div style={{ fontSize: 13, color: "#1E293B", lineHeight: 1.6 }}>{story.story}</div>
                           </div>
-
                           <div style={{ marginBottom: 14 }}>
                             <div style={{ fontSize: 11, fontWeight: 700, color: "#374151", marginBottom: 8 }}>ACCEPTANCE CRITERIA</div>
                             {story.acceptanceCriteria.map((ac, i) => (
@@ -283,24 +313,17 @@ export default function Home() {
                               </div>
                             ))}
                           </div>
-
                           <div style={{ background: "#F8FAFC", borderRadius: 8, padding: "10px 14px", marginBottom: 14 }}>
                             <div style={{ fontSize: 11, fontWeight: 700, color: "#374151", marginBottom: 8 }}>INVEST SCORE: {score}/6</div>
                             <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
                               {INVEST.map(c => {
                                 const pass = story.invest[c.toLowerCase()];
-                                return (
-                                  <span key={c} style={{ fontSize: 11, padding: "3px 8px", borderRadius: 4, background: pass ? "#DCFCE7" : "#FEE2E2", color: pass ? "#166534" : "#B91C1C", fontWeight: 600 }}>
-                                    {pass ? "✓" : "✗"} {c}
-                                  </span>
-                                );
+                                return <span key={c} style={{ fontSize: 11, padding: "3px 8px", borderRadius: 4, background: pass ? "#DCFCE7" : "#FEE2E2", color: pass ? "#166534" : "#B91C1C", fontWeight: 600 }}>{pass ? "✓" : "✗"} {c}</span>;
                               })}
                             </div>
                             {story.investNotes && <div style={{ fontSize: 12, color: "#64748B", fontStyle: "italic" }}>{story.investNotes}</div>}
                           </div>
-
-                          <button onClick={() => copyStory(story)}
-                            style={{ padding: "7px 16px", background: copied === story.id ? "#16A34A" : "#F1F5F9", color: copied === story.id ? "white" : "#374151", border: "1px solid #E2E8F0", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                          <button onClick={() => copyStory(story)} style={{ padding: "7px 16px", background: copied === story.id ? "#16A34A" : "#F1F5F9", color: copied === story.id ? "white" : "#374151", border: "1px solid #E2E8F0", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
                             {copied === story.id ? "✓ Copied to clipboard" : "Copy story"}
                           </button>
                         </div>
