@@ -1,6 +1,46 @@
 import { useState } from "react";
 import Head from "next/head";
 
+const systemPrompt = `You are a senior product analyst specializing in financial services and branch banking operations.
+Your job is to generate well-structured product artifacts from feature descriptions.
+
+When given a feature description, persona, and product area, output ONLY valid JSON — no markdown, no explanation, no preamble.
+
+The JSON must follow this exact structure:
+{
+  "epic": {
+    "title": "Short epic title (5-8 words)",
+    "description": "One clear sentence describing the epic's business objective and value."
+  },
+  "stories": [
+    {
+      "id": "US-01",
+      "title": "Short story title",
+      "story": "As a [persona], I want [specific goal], so that [clear business benefit].",
+      "priority": "High|Medium|Low",
+      "storyPoints": 3,
+      "acceptanceCriteria": [
+        "Given [initial context], When [action is taken], Then [expected outcome].",
+        "Given [another context], When [another action], Then [another outcome]."
+      ],
+      "invest": {
+        "independent": true,
+        "negotiable": true,
+        "valuable": true,
+        "estimable": true,
+        "small": true,
+        "testable": true
+      },
+      "investNotes": "One sentence on any INVEST concern, or confirming quality."
+    }
+  ]
+}
+
+Generate 3 to 4 stories. Make them specific to financial services and branch banking.
+Ensure acceptance criteria use real Given/When/Then format with concrete, testable conditions.
+Story points should be realistic: 1, 2, 3, 5, or 8.
+Set invest criteria honestly — if a story is too large, mark small as false.`;
+
 const INVEST = ["Independent", "Negotiable", "Valuable", "Estimable", "Small", "Testable"];
 const PERSONAS = ["Branch Employee", "Branch Manager", "Customer", "Operations Analyst", "Regional Director"];
 const AREAS = ["Account Management", "Customer Onboarding", "Teller Operations", "Loan Processing", "Reporting & Analytics", "Employee Experience", "Digital Banking"];
@@ -35,7 +75,10 @@ export default function Home() {
           model: "claude-sonnet-4-6",
           max_tokens: 1024,
           system: systemPrompt,
-          messages: [{ role: "user", content: `Feature Description: ${feature}\nPrimary Persona: ${persona}\nProduct Area: ${area}\n\nGenerate the epic and user stories for this feature.` }]
+          messages: [{
+            role: "user",
+            content: `Feature Description: ${feature}\nPrimary Persona: ${persona}\nProduct Area: ${area}\n\nGenerate the epic and user stories for this feature.`
+          }]
         })
       });
       const data = await resp.json();
@@ -43,7 +86,6 @@ export default function Home() {
       const clean = raw.replace(/```json|```/g, "").trim();
       const parsed = JSON.parse(clean);
       setResult(parsed);
-      setResult(data);
       setExpanded({ "US-01": true });
     } catch (e) {
       setError(e.message || "Something went wrong. Please try again.");
@@ -101,7 +143,6 @@ export default function Home() {
 
       <div style={{ fontFamily: "'Inter', system-ui, sans-serif", minHeight: "100vh", background: "#F0F4F8", color: "#1E293B" }}>
 
-        {/* HEADER */}
         <div style={{ background: "#0F2847", padding: "18px 32px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <div style={{ width: 36, height: 36, background: "#2563EB", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -117,7 +158,6 @@ export default function Home() {
 
         <div style={{ maxWidth: 1100, margin: "0 auto", padding: "28px 24px", display: "grid", gridTemplateColumns: "380px 1fr", gap: 24, alignItems: "start" }}>
 
-          {/* INPUT PANEL */}
           <div style={{ background: "white", borderRadius: 12, padding: 24, boxShadow: "0 1px 4px rgba(0,0,0,0.08)", position: "sticky", top: 24 }}>
             <div style={{ fontSize: 14, fontWeight: 600, color: "#0F2847", marginBottom: 4 }}>Feature Description</div>
             <div style={{ fontSize: 12, color: "#64748B", marginBottom: 12 }}>Describe the feature or capability you want to build.</div>
@@ -164,7 +204,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* OUTPUT PANEL */}
           <div>
             {!result && !loading && !error && (
               <div style={{ background: "white", borderRadius: 12, padding: 48, textAlign: "center", boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
