@@ -56,6 +56,8 @@ export default function Home() {
   const [expanded, setExpanded] = useState({});
   const [done, setDone] = useState({});
   const [redoing, setRedoing] = useState({});
+  const [editingAC, setEditingAC] = useState({}); // { storyId-acIndex: true }
+  const [acDrafts, setAcDrafts] = useState({});   // { storyId-acIndex: "text" }
 
   async function generate() {
     if (!feature.trim()) return;
@@ -64,6 +66,8 @@ export default function Home() {
     setResult(null);
     setExpanded({});
     setDone({});
+    setEditingAC({});
+    setAcDrafts({});
     try {
       const resp = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -117,13 +121,63 @@ export default function Home() {
       newStory.id = storyId;
       setResult(prev => ({ ...prev, stories: prev.stories.map(s => s.id === storyId ? newStory : s) }));
       setDone(d => ({ ...d, [storyId]: false }));
-    } catch (e) { /* fail silently */ } finally {
+      // clear any AC edits for this story
+      setEditingAC(e => { const n = { ...e }; Object.keys(n).filter(k => k.startsWith(storyId)).forEach(k => delete n[k]); return n; });
+      setAcDrafts(d => { const n = { ...d }; Object.keys(n).filter(k => k.startsWith(storyId)).forEach(k => delete n[k]); return n; });
+    } catch (e) { } finally {
       setRedoing(r => ({ ...r, [storyId]: false }));
     }
   }
 
   function reset() {
-    setResult(null); setFeature(""); setExpanded({}); setDone({}); setError(""); setCopied("");
+    setResult(null); setFeature(""); setExpanded({}); setDone({}); setError(""); setCopied(""); setEditingAC({}); setAcDrafts({});
+  }
+
+  // AC editing helpers
+  function acKey(storyId, i) { return `${storyId}-${i}`; }
+
+  function startEditAC(storyId, i, currentText) {
+    setEditingAC(e => ({ ...e, [acKey(storyId, i)]: true }));
+    setAcDrafts(d => ({ ...d, [acKey(storyId, i)]: currentText }));
+  }
+
+  function saveAC(storyId, i) {
+    const key = acKey(storyId, i);
+    const newText = acDrafts[key];
+    if (!newText?.trim()) return;
+    setResult(prev => ({
+      ...prev,
+      stories: prev.stories.map(s => s.id === storyId
+        ? { ...s, acceptanceCriteria: s.acceptanceCriteria.map((ac, idx) => idx === i ? newText.trim() : ac) }
+        : s)
+    }));
+    setEditingAC(e => { const n = { ...e }; delete n[key]; return n; });
+    setAcDrafts(d => { const n = { ...d }; delete n[key]; return n; });
+  }
+
+  function deleteAC(storyId, i) {
+    setResult(prev => ({
+      ...prev,
+      stories: prev.stories.map(s => s.id === storyId
+        ? { ...s, acceptanceCriteria: s.acceptanceCriteria.filter((_, idx) => idx !== i) }
+        : s)
+    }));
+  }
+
+  function addAC(storyId) {
+    const newAC = "Given [], When [], Then [].";
+    setResult(prev => ({
+      ...prev,
+      stories: prev.stories.map(s => s.id === storyId
+        ? { ...s, acceptanceCriteria: [...s.acceptanceCriteria, newAC] }
+        : s)
+    }));
+    // immediately open edit mode on new one
+    setTimeout(() => {
+      const story = result?.stories.find(s => s.id === storyId);
+      const newIdx = story ? story.acceptanceCriteria.length : 0;
+      startEditAC(storyId, newIdx, newAC);
+    }, 50);
   }
 
   function copyStory(story) {
@@ -181,6 +235,7 @@ export default function Home() {
 
         <div style={{ maxWidth: 1100, margin: "0 auto", padding: "28px 24px", display: "grid", gridTemplateColumns: "380px 1fr", gap: 24, alignItems: "start" }}>
 
+          {/* INPUT PANEL */}
           <div style={{ background: "white", borderRadius: 12, padding: 24, boxShadow: "0 1px 4px rgba(0,0,0,0.08)", position: "sticky", top: 24 }}>
             <div style={{ fontSize: 14, fontWeight: 600, color: "#0F2847", marginBottom: 4 }}>Feature Description</div>
             <div style={{ fontSize: 12, color: "#64748B", marginBottom: 12 }}>Describe the feature or capability you want to build.</div>
@@ -232,6 +287,7 @@ export default function Home() {
             </div>
           </div>
 
+          {/* OUTPUT PANEL */}
           <div>
             {!result && !loading && !error && (
               <div style={{ background: "white", borderRadius: 12, padding: 48, textAlign: "center", boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
@@ -268,8 +324,11 @@ export default function Home() {
                   const isRedoing = redoing[story.id];
                   const pc = priorityColor(story.priority);
                   const score = Object.values(story.invest).filter(Boolean).length;
+
                   return (
                     <div key={story.id} style={{ background: isDone ? "#F0FDF4" : "white", borderRadius: 12, marginBottom: 12, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", overflow: "hidden", border: `1.5px solid ${isDone ? "#86EFAC" : "#E2E8F0"}`, opacity: isDone ? 0.75 : 1, transition: "all 0.2s" }}>
+
+                      {/* CARD HEADER */}
                       <div style={{ padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                         <div onClick={() => !isDone && setExpanded(e => ({ ...e, [story.id]: !e[story.id] }))}
                           style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, cursor: isDone ? "default" : "pointer", userSelect: "none" }}>
@@ -298,21 +357,57 @@ export default function Home() {
                         </div>
                       </div>
 
+                      {/* CARD BODY */}
                       {isOpen && !isDone && (
                         <div style={{ padding: "0 18px 18px" }}>
                           <div style={{ background: "#F8FAFC", borderRadius: 8, padding: "12px 14px", marginBottom: 14, borderLeft: "3px solid #2563EB" }}>
                             <div style={{ fontSize: 11, fontWeight: 700, color: "#2563EB", marginBottom: 4 }}>USER STORY</div>
                             <div style={{ fontSize: 13, color: "#1E293B", lineHeight: 1.6 }}>{story.story}</div>
                           </div>
+
+                          {/* ACCEPTANCE CRITERIA — EDITABLE */}
                           <div style={{ marginBottom: 14 }}>
                             <div style={{ fontSize: 11, fontWeight: 700, color: "#374151", marginBottom: 8 }}>ACCEPTANCE CRITERIA</div>
-                            {story.acceptanceCriteria.map((ac, i) => (
-                              <div key={i} style={{ display: "flex", gap: 10, marginBottom: 8, alignItems: "flex-start" }}>
-                                <span style={{ fontSize: 11, fontWeight: 700, color: "white", background: "#0F2847", borderRadius: 4, padding: "2px 6px", flexShrink: 0, marginTop: 1 }}>AC{i + 1}</span>
-                                <span style={{ fontSize: 13, color: "#374151", lineHeight: 1.5 }}>{ac}</span>
-                              </div>
-                            ))}
+                            {story.acceptanceCriteria.map((ac, i) => {
+                              const key = acKey(story.id, i);
+                              const isEditing = editingAC[key];
+                              return (
+                                <div key={i} style={{ display: "flex", gap: 10, marginBottom: 8, alignItems: "flex-start" }}>
+                                  <span style={{ fontSize: 11, fontWeight: 700, color: "white", background: "#0F2847", borderRadius: 4, padding: "2px 6px", flexShrink: 0, marginTop: isEditing ? 6 : 2 }}>AC{i + 1}</span>
+                                  {isEditing ? (
+                                    <div style={{ flex: 1 }}>
+                                      <textarea
+                                        value={acDrafts[key] || ""}
+                                        onChange={e => setAcDrafts(d => ({ ...d, [key]: e.target.value }))}
+                                        autoFocus
+                                        style={{ width: "100%", fontSize: 13, color: "#1E293B", border: "1.5px solid #2563EB", borderRadius: 6, padding: "6px 10px", fontFamily: "inherit", lineHeight: 1.5, boxSizing: "border-box", resize: "vertical", minHeight: 64, outline: "none" }}
+                                      />
+                                      <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                                        <button onClick={() => saveAC(story.id, i)}
+                                          style={{ padding: "4px 12px", background: "#2563EB", color: "white", border: "none", borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Save</button>
+                                        <button onClick={() => setEditingAC(e => { const n = { ...e }; delete n[key]; return n; })}
+                                          style={{ padding: "4px 10px", background: "none", border: "1px solid #E2E8F0", borderRadius: 5, fontSize: 11, color: "#64748B", cursor: "pointer" }}>Cancel</button>
+                                        <button onClick={() => deleteAC(story.id, i)}
+                                          style={{ padding: "4px 10px", background: "none", border: "1px solid #FECACA", borderRadius: 5, fontSize: 11, color: "#B91C1C", cursor: "pointer", marginLeft: "auto" }}>Delete</button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div style={{ flex: 1, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+                                      <span style={{ fontSize: 13, color: "#374151", lineHeight: 1.5 }}>{ac}</span>
+                                      <button onClick={() => startEditAC(story.id, i, ac)} title="Edit"
+                                        style={{ padding: "2px 8px", background: "none", border: "1px solid #E2E8F0", borderRadius: 5, fontSize: 11, color: "#64748B", cursor: "pointer", flexShrink: 0, marginTop: 2 }}>✏️</button>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                            {/* ADD CRITERIA */}
+                            <button onClick={() => addAC(story.id)}
+                              style={{ marginTop: 4, padding: "5px 12px", background: "none", border: "1.5px dashed #CBD5E1", borderRadius: 6, fontSize: 12, color: "#64748B", cursor: "pointer", fontWeight: 600, width: "100%" }}>
+                              + Add acceptance criteria
+                            </button>
                           </div>
+
                           <div style={{ background: "#F8FAFC", borderRadius: 8, padding: "10px 14px", marginBottom: 14 }}>
                             <div style={{ fontSize: 11, fontWeight: 700, color: "#374151", marginBottom: 8 }}>INVEST SCORE: {score}/6</div>
                             <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
@@ -323,6 +418,7 @@ export default function Home() {
                             </div>
                             {story.investNotes && <div style={{ fontSize: 12, color: "#64748B", fontStyle: "italic" }}>{story.investNotes}</div>}
                           </div>
+
                           <button onClick={() => copyStory(story)} style={{ padding: "7px 16px", background: copied === story.id ? "#16A34A" : "#F1F5F9", color: copied === story.id ? "white" : "#374151", border: "1px solid #E2E8F0", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
                             {copied === story.id ? "✓ Copied to clipboard" : "Copy story"}
                           </button>
