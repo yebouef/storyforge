@@ -86,7 +86,7 @@ export default function Home() {
       const clean = raw.replace(/```json|```/g, "").trim();
       const parsed = JSON.parse(clean);
       setResult(parsed);
-      setExpanded({ "US-01": true });
+      setExpanded(Object.fromEntries(parsed.stories.map(s => [s.id, true])));
     } catch (e) {
       setError(e.message || "Something went wrong. Please try again.");
     } finally {
