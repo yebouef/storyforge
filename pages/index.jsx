@@ -23,13 +23,26 @@ export default function Home() {
     setExpanded({});
 
     try {
-      const resp = await fetch("/api/generate", {
+      const resp = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ feature, persona, area })
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true"
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 1024,
+          system: systemPrompt,
+          messages: [{ role: "user", content: `Feature Description: ${feature}\nPrimary Persona: ${persona}\nProduct Area: ${area}\n\nGenerate the epic and user stories for this feature.` }]
+        })
       });
       const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || "Failed");
+      const raw = data.content?.find(b => b.type === "text")?.text || "";
+      const clean = raw.replace(/```json|```/g, "").trim();
+      const parsed = JSON.parse(clean);
+      setResult(parsed);
       setResult(data);
       setExpanded({ "US-01": true });
     } catch (e) {
